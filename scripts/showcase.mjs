@@ -1,0 +1,295 @@
+/**
+ * Renders showcase GIFs of the site's interactions and scroll animations.
+ *
+ *   node scripts/showcase.mjs            # all scenes
+ *   node scripts/showcase.mjs 03 06      # only those ids
+ *
+ * Output: showcase/NN-name.gif at 1600x1200.
+ *
+ * Scroll-driven sequences are stepped deterministically — we set scrollY per
+ * frame — so playback is smooth no matter how slow capture is. Time-based
+ * animations (entrance choreography, blur reveals) are sampled in real time.
+ *
+ * Frames are written as PNG and assembled by ffmpeg: a JS encoder with a
+ * shared palette posterises the photography badly, while ffmpeg's palettegen
+ * weights toward what actually changes between frames.
+ */
+import { chromium } from 'playwright'
+import { execFileSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs'
+
+const BASE = process.env.BASE ?? 'http://localhost:4173'
+const FFMPEG = '/opt/homebrew/bin/ffmpeg'
+const W = 1600
+const H = 1200
+const DELAY = 62 // ms per frame → ~16fps
+const OUT = 'showcase'
+const TMP = '/tmp/halcyon-frames'
+
+mkdirSync(OUT, { recursive: true })
+const only = process.argv.slice(2)
+const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2)
+const pad = (n) => String(n).padStart(4, '0')
+
+/* ------------------------------------------------------------- recording */
+
+function recorder() {
+  rmSync(TMP, { recursive: true, force: true })
+  mkdirSync(TMP, { recursive: true })
+  let n = 0
+  return {
+    async shot(page, times = 1, gap = 0) {
+      for (let i = 0; i < times; i++) {
+        await page.screenshot({ path: `${TMP}/f-${pad(n++)}.png`, type: 'png' })
+        if (gap) await page.waitForTimeout(gap)
+      }
+    },
+    /** Freeze on the final frame so the loop reads as finished. */
+    hold(times = 8) {
+      const last = `${TMP}/f-${pad(n - 1)}.png`
+      for (let i = 0; i < times; i++) copyFileSync(last, `${TMP}/f-${pad(n++)}.png`)
+    },
+    get count() {
+      return n
+    },
+  }
+}
+
+/**
+ * `heavy` scenes are ones where the whole frame moves every step (long scroll
+ * sweeps, the marquee), so rectangle diffing saves nothing and error-diffused
+ * dithering explodes the size. Ordered bayer dithering repeats, which LZW
+ * compresses well — it roughly halves those files at a cost only visible if
+ * you go looking for it.
+ */
+function encode(path, heavy = false) {
+  const dither = heavy ? 'bayer:bayer_scale=5' : 'sierra2_4a'
+  const colors = heavy ? 160 : 224
+  execFileSync(
+    FFMPEG,
+    [
+      '-y',
+      '-loglevel', 'error',
+      '-framerate', String(Math.round(1000 / DELAY)),
+      '-start_number', '0',
+      '-i', `${TMP}/f-%04d.png`,
+      '-filter_complex',
+      '[0:v]split[a][b];' +
+        `[a]palettegen=max_colors=${colors}:stats_mode=diff[p];` +
+        `[b][p]paletteuse=dither=${dither}:diff_mode=rectangle`,
+      '-loop', '0',
+      path,
+    ],
+    { stdio: 'pipe' },
+  )
+}
+
+/* --------------------------------------------------------------- helpers */
+
+async function newPage(browser) {
+  const ctx = await browser.newContext({
+    viewport: { width: W, height: H },
+    deviceScaleFactor: 1,
+  })
+  const page = await ctx.newPage()
+  // Keep the consent banner out of every capture.
+  await page.addInitScript(() => localStorage.setItem('pcp-analytics-consent', 'denied'))
+  return { ctx, page }
+}
+
+/** One full pass so lazy images decode and in-view reveals settle. */
+async function warm(page) {
+  await page.evaluate(async () => {
+    const step = window.innerHeight * 0.8
+    for (let y = 0; y < document.body.scrollHeight; y += step) {
+      window.scrollTo(0, y)
+      await new Promise((r) => setTimeout(r, 70))
+    }
+    window.scrollTo(0, 0)
+  })
+  await page.waitForTimeout(500)
+}
+
+/** Absolute document Y of the section containing `text`. */
+const anchorY = (page, text) =>
+  page.evaluate((t) => {
+    const el = [...document.querySelectorAll('h1,h2,h3')].find((e) =>
+      e.textContent.includes(t),
+    )
+    return (el.closest('section') ?? el).getBoundingClientRect().top + window.scrollY
+  }, text)
+
+async function sweep(page, rec, from, to, count, settle = 85) {
+  for (let i = 0; i < count; i++) {
+    const t = easeInOut(i / (count - 1))
+    await page.evaluate((y) => window.scrollTo(0, y), Math.round(from + (to - from) * t))
+    await page.waitForTimeout(settle)
+    await rec.shot(page)
+  }
+}
+
+/* ----------------------------------------------------------------- scenes */
+
+const scenes = [
+  {
+    id: '01',
+    name: 'hero-entrance',
+    async run(page, rec) {
+      await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+      await page.evaluate(() => document.fonts.ready)
+      await rec.shot(page, 38, 65)
+      rec.hold()
+    },
+  },
+  {
+    id: '02',
+    name: 'stat-figures-blur-in',
+    async run(page, rec) {
+      await page.goto(BASE, { waitUntil: 'networkidle' })
+      await warm(page)
+      const y = await anchorY(page, 'Medical hair loss is not a cosmetic problem')
+      // Reload so the reveal is unfired, park below it, then rise into view.
+      await page.reload({ waitUntil: 'networkidle' })
+      await page.evaluate((v) => window.scrollTo(0, v), y - H * 0.8)
+      await page.waitForTimeout(500)
+      await sweep(page, rec, y - H * 0.8, y - H * 0.05, 18, 70)
+      await rec.shot(page, 20, 65)
+      rec.hold()
+    },
+  },
+  {
+    id: '03',
+    name: 'process-stack-scroll',
+    heavy: true,
+    async run(page, rec) {
+      await page.goto(BASE, { waitUntil: 'networkidle' })
+      await warm(page)
+      const y = await anchorY(page, 'Five stages, none of them rushed')
+      await sweep(page, rec, y - 140, y + 3500, 54, 55)
+      rec.hold()
+    },
+  },
+  {
+    id: '04',
+    name: 'testimonial-marquee',
+    heavy: true,
+    async run(page, rec) {
+      await page.goto(BASE, { waitUntil: 'networkidle' })
+      await warm(page)
+      const y = await anchorY(page, 'Two thousand four hundred people')
+      await page.evaluate((v) => window.scrollTo(0, v), y - 30)
+      await page.waitForTimeout(700)
+      // Drive the marquee by hand so one GIF loop is exactly one track loop.
+      const total = await page.evaluate(() => {
+        const t = document.querySelector('.story-marquee')
+        t.style.animation = 'none'
+        return t.scrollWidth / 2
+      })
+      const N = 48
+      for (let i = 0; i < N; i++) {
+        await page.evaluate((x) => {
+          document.querySelector('.story-marquee').style.transform = `translate3d(${-x}px,0,0)`
+        }, (total * i) / N)
+        await page.waitForTimeout(35)
+        await rec.shot(page)
+      }
+      // No hold — it is a seamless loop.
+    },
+  },
+  {
+    id: '05',
+    name: 'closing-invitation',
+    async run(page, rec) {
+      await page.goto(BASE, { waitUntil: 'networkidle' })
+      await warm(page)
+      const end = await page.evaluate(() => document.body.scrollHeight - window.innerHeight)
+      await sweep(page, rec, end - 1600, end, 34, 70)
+      rec.hold()
+    },
+  },
+  {
+    id: '06',
+    name: 'insurance-verification-form',
+    async run(page, rec) {
+      await page.goto(`${BASE}/insurance`, { waitUntil: 'networkidle' })
+      await warm(page)
+      const y = await anchorY(page, 'Find out what you would pay')
+      await page.evaluate((v) => window.scrollTo(0, v), y - 50)
+      await page.waitForTimeout(600)
+
+      const type = async (label, value) => {
+        await page.getByLabel(label, { exact: true }).click()
+        await page.keyboard.type(value, { delay: 14 })
+        await rec.shot(page, 2)
+      }
+
+      await rec.shot(page, 4)
+      await type('First name', 'Dana')
+      await type('Last name', 'Reyes')
+      await type('Email', 'dana@example.com')
+      await page.getByLabel('Insurance carrier', { exact: true }).selectOption('Other')
+      await page.waitForTimeout(280)
+      await rec.shot(page, 5, 60) // the conditional carrier field appears
+      await type('Carrier name', 'Neighborhood Health Plan')
+      await page.getByText('I authorize Halcyon Cranial Studio').click()
+      await page.waitForTimeout(280)
+      await rec.shot(page, 6, 60) // consent ticked, submit enables
+      await page.getByRole('button', { name: 'Send securely' }).click()
+      await page.waitForTimeout(450)
+      await rec.shot(page, 8, 70) // confirmation
+      rec.hold(10)
+    },
+  },
+  {
+    id: '07',
+    name: 'story-reveal',
+    heavy: true,
+    async run(page, rec) {
+      await page.goto(`${BASE}/stories`, { waitUntil: 'networkidle' })
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(400)
+      const y = await anchorY(page, 'Told by the people')
+      await sweep(page, rec, y + 250, y + 1600, 34, 75)
+      rec.hold()
+    },
+  },
+  {
+    id: '08',
+    name: 'faq-accordion',
+    async run(page, rec) {
+      await page.goto(`${BASE}/faq`, { waitUntil: 'networkidle' })
+      await warm(page)
+      const y = await anchorY(page, 'Is a cranial prosthesis the same thing as a wig')
+      await page.evaluate((v) => window.scrollTo(0, v), y - 240)
+      await page.waitForTimeout(500)
+      await rec.shot(page, 4, 50)
+      for (const q of [
+        /Will my insurance cover it/,
+        /How much does a commission cost/,
+        /How long does it take/,
+      ]) {
+        await page.getByRole('button', { name: q }).click()
+        await rec.shot(page, 9, 45)
+      }
+      rec.hold()
+    },
+  },
+]
+
+/* -------------------------------------------------------------------- run */
+
+const browser = await chromium.launch()
+for (const scene of scenes) {
+  if (only.length && !only.includes(scene.id)) continue
+  const { ctx, page } = await newPage(browser)
+  const rec = recorder()
+  const started = Date.now()
+  await scene.run(page, rec)
+  const path = `${OUT}/${scene.id}-${scene.name}.gif`
+  encode(path, scene.heavy)
+  console.log(`${path}  ${rec.count} frames  ${((Date.now() - started) / 1000).toFixed(1)}s`)
+  await ctx.close()
+}
+await browser.close()
+rmSync(TMP, { recursive: true, force: true })
+console.log('done')
