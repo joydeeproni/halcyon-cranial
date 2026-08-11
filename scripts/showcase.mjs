@@ -16,7 +16,7 @@
  */
 import { chromium } from 'playwright'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
 
 const BASE = process.env.BASE ?? 'http://localhost:4173'
 const FFMPEG = '/opt/homebrew/bin/ffmpeg'
@@ -55,33 +55,73 @@ function recorder() {
   }
 }
 
+const LIMIT = 5 * 1024 * 1024 // hard ceiling per GIF
+
 /**
- * `heavy` scenes are ones where the whole frame moves every step (long scroll
- * sweeps, the marquee), so rectangle diffing saves nothing and error-diffused
- * dithering explodes the size. Ordered bayer dithering repeats, which LZW
- * compresses well — it roughly halves those files at a cost only visible if
- * you go looking for it.
+ * Quality ladder, tried in order until the file fits under LIMIT.
+ *
+ * Ordering matters: palette reductions are nearly invisible on this brand's
+ * muted range, dropping frames is noticeable but acceptable, and scaling down
+ * is the last thing to give up. `every: 2` keeps one frame in two and halves
+ * the output rate so the sequence still plays at its intended speed.
  */
-function encode(path, heavy = false) {
-  const dither = heavy ? 'bayer:bayer_scale=5' : 'sierra2_4a'
-  const colors = heavy ? 160 : 224
+const LADDER = [
+  { colors: 200, every: 1, dither: 'sierra2_4a' },
+  { colors: 160, every: 1, dither: 'bayer:bayer_scale=5' },
+  { colors: 128, every: 1, dither: 'bayer:bayer_scale=5' },
+  { colors: 96, every: 1, dither: 'bayer:bayer_scale=4' },
+  { colors: 72, every: 1, dither: 'bayer:bayer_scale=4' },
+  { colors: 128, every: 2, dither: 'bayer:bayer_scale=5' },
+  { colors: 96, every: 2, dither: 'bayer:bayer_scale=4' },
+  { colors: 64, every: 2, dither: 'bayer:bayer_scale=4' },
+  { colors: 48, every: 3, dither: 'bayer:bayer_scale=4' },
+]
+
+function run({ colors, every, dither }, path) {
+  const fps = Math.round(1000 / DELAY)
+  // Output stays 1600x1200 — the budget comes out of palette and frame rate,
+  // never resolution.
+  const chain =
+    every > 1
+      ? `[0:v]select='not(mod(n\\,${every}))',split[a][b]`
+      : '[0:v]split[a][b]'
+
   execFileSync(
     FFMPEG,
     [
       '-y',
       '-loglevel', 'error',
-      '-framerate', String(Math.round(1000 / DELAY)),
+      '-framerate', String(fps),
       '-start_number', '0',
       '-i', `${TMP}/f-%04d.png`,
       '-filter_complex',
-      '[0:v]split[a][b];' +
+      `${chain};` +
         `[a]palettegen=max_colors=${colors}:stats_mode=diff[p];` +
         `[b][p]paletteuse=dither=${dither}:diff_mode=rectangle`,
+      '-r', String(Math.max(1, Math.round(fps / every))),
       '-loop', '0',
       path,
     ],
     { stdio: 'pipe' },
   )
+  return statSync(path).size
+}
+
+/** Encodes at the highest rung of the ladder that lands under the ceiling. */
+function encode(path) {
+  let size = 0
+  for (const [i, rung] of LADDER.entries()) {
+    size = run(rung, path)
+    if (size <= LIMIT) {
+      const notes = [
+        `${rung.colors} colours`,
+        rung.every > 1 ? `every ${rung.every}${rung.every === 2 ? 'nd' : 'rd'} frame` : 'all frames',
+        `${W}x${H}`,
+      ].filter(Boolean)
+      return { size, rung: i, notes: notes.join(', ') }
+    }
+  }
+  return { size, rung: LADDER.length - 1, notes: 'floor reached — still over' }
 }
 
 /* --------------------------------------------------------------- helpers */
@@ -162,9 +202,9 @@ const scenes = [
       // Fresh load, so the entrance choreography plays from frame zero.
       await page.goto(BASE, { waitUntil: 'domcontentloaded' })
       await page.evaluate(() => document.fonts.ready)
-      await rec.shot(page, 34, 65)
+      await rec.shot(page, 22, 70)
       // Then drift down so the trust strip and opening section reveal.
-      await sweep(page, rec, 0, 900, 16, 70)
+      await sweep(page, rec, 0, 900, 12, 70)
       rec.hold()
     },
   },
@@ -175,8 +215,8 @@ const scenes = [
       await prime(page)
       const y = await anchorY(page, 'Medical hair loss is not a cosmetic problem')
       const from = await parkAbove(page, y)
-      await sweep(page, rec, from, y - H * 0.06, 20, 70)
-      await rec.shot(page, 18, 65) // hold while the figures resolve
+      await sweep(page, rec, from, y - H * 0.06, 15, 70)
+      await rec.shot(page, 13, 70) // hold while the figures resolve
       rec.hold()
     },
   },
@@ -188,7 +228,7 @@ const scenes = [
       await prime(page)
       const y = await anchorY(page, 'Five stages, none of them rushed')
       const from = await parkAbove(page, y, H * 0.75)
-      await sweep(page, rec, from, y + 3500, 60, 55)
+      await sweep(page, rec, from, y + 3500, 38, 55)
       rec.hold()
     },
   },
@@ -201,13 +241,13 @@ const scenes = [
       const y = await anchorY(page, 'Two thousand four hundred people')
       const from = await parkAbove(page, y, H * 0.7)
       // Approach first, so the heading reveals and the cards arrive moving.
-      await sweep(page, rec, from, y - 30, 14, 70)
+      await sweep(page, rec, from, y - 30, 10, 70)
       const total = await page.evaluate(() => {
         const t = document.querySelector('.story-marquee')
         t.style.animation = 'none'
         return t.scrollWidth / 2
       })
-      const N = 40
+      const N = 28
       for (let i = 0; i < N; i++) {
         await page.evaluate((x) => {
           document.querySelector('.story-marquee').style.transform = `translate3d(${-x}px,0,0)`
@@ -225,7 +265,7 @@ const scenes = [
       const end = await page.evaluate(() => document.body.scrollHeight - window.innerHeight)
       await page.evaluate((v) => window.scrollTo(0, v), end - 1700)
       await page.waitForTimeout(450)
-      await sweep(page, rec, end - 1700, end, 36, 70)
+      await sweep(page, rec, end - 1700, end, 28, 70)
       rec.hold()
     },
   },
@@ -237,7 +277,7 @@ const scenes = [
       const y = await anchorY(page, 'Find out what you would pay')
       const from = await parkAbove(page, y, H * 0.8)
       // Scroll in first, so the panel and privacy note reveal on camera.
-      await sweep(page, rec, from, y - 50, 16, 70)
+      await sweep(page, rec, from, y - 50, 12, 70)
 
       const type = async (label, value) => {
         await page.getByLabel(label, { exact: true }).click()
@@ -271,7 +311,7 @@ const scenes = [
       const y = await anchorY(page, 'Told by the people')
       await page.evaluate((v) => window.scrollTo(0, v), y + 200)
       await page.waitForTimeout(400)
-      await sweep(page, rec, y + 200, y + 1650, 38, 72)
+      await sweep(page, rec, y + 200, y + 1650, 30, 72)
       rec.hold()
     },
   },
@@ -283,7 +323,7 @@ const scenes = [
       const y = await anchorY(page, 'Is a cranial prosthesis the same thing as a wig')
       const from = await parkAbove(page, y, H * 0.8)
       // Scroll in so the intro column and first answer reveal, then interact.
-      await sweep(page, rec, from, y - 240, 16, 70)
+      await sweep(page, rec, from, y - 240, 12, 70)
       await rec.shot(page, 3, 50)
       for (const q of [
         /Will my insurance cover it/,
@@ -308,8 +348,10 @@ for (const scene of scenes) {
   const started = Date.now()
   await scene.run(page, rec)
   const path = `${OUT}/${scene.id}-${scene.name}.gif`
-  encode(path, scene.heavy)
-  console.log(`${path}  ${rec.count} frames  ${((Date.now() - started) / 1000).toFixed(1)}s`)
+  const { size, notes } = encode(path)
+  console.log(
+    `${path}\n    ${rec.count} frames · ${(size / 1048576).toFixed(1)} MB · ${notes} · ${((Date.now() - started) / 1000).toFixed(1)}s`,
+  )
   await ctx.close()
 }
 await browser.close()
