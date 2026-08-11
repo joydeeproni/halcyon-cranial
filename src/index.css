@@ -1,0 +1,306 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   Halcyon Cranial Studio — design tokens
+   Quiet-luxury atelier meets clinical trust.
+   ============================================================ */
+
+@theme {
+  /* Ink & evergreen — the anchor. Never pure black. */
+  --color-ink: #141d19;
+  --color-forest: #1b2a24;
+  --color-evergreen: #274036;
+  --color-moss: #46604f;
+
+  /* Sage — the connective tissue */
+  --color-sage: #7d9686;
+  --color-sage-mid: #a7bcae;
+  --color-sage-soft: #c8d6cc;
+  --color-mist: #dfe6e0;
+
+  /* Secondary text. Opacity-blended moss and sage fall below 4.5:1 at the
+     sizes we set them, so quiet text gets its own tokens rather than a
+     modifier: --color-muted clears AA on every light surface we use
+     (bone 5.9, linen 5.3, mist 5.1, parchment 4.8), and --color-sage-quiet
+     clears it on the evergreen field (6.7). */
+  --color-muted: #4f6357;
+  --color-sage-quiet: #9db3a5;
+
+  /* Warm neutrals — the page itself */
+  --color-bone: #f7f4ee;
+  --color-linen: #efe9df;
+  --color-parchment: #e6ded1;
+
+  /* Clay — the single accent, used sparingly.
+     --color-clay is for fills, rules and rings; clay set as *text* on a light
+     surface only reaches 3.6:1, so text uses --color-clay-deep (5.8 on bone,
+     5.3 on linen, 4.8 on parchment). */
+  --color-clay: #b0704f;
+  --color-clay-deep: #8a5134;
+  --color-clay-soft: #e5d2c5;
+
+  --font-display: 'Newsreader', ui-serif, Georgia, serif;
+  --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
+
+  --radius-arch: 12rem;
+
+  --ease-calm: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --breakpoint-xs: 30rem;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  body {
+    background-color: var(--color-bone);
+    color: var(--color-forest);
+    font-family: var(--font-sans);
+    font-weight: 350;
+    font-size: 1rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'kern' 1, 'liga' 1;
+    /* No overflow-x: hidden here — it makes <body> a scroll container and
+       silently breaks position: sticky. The layout is verified overflow-free
+       at every breakpoint by `npm run flows` instead. */
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  blockquote {
+    font-family: var(--font-display);
+    font-weight: 300;
+    letter-spacing: -0.015em;
+    line-height: 1.08;
+    text-wrap: balance;
+    font-optical-sizing: auto;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Numerals align in columns wherever they're set as data */
+  .numerals {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  ::selection {
+    background-color: var(--color-clay-soft);
+    color: var(--color-forest);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-clay);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  /* Fluid, generous display sizes */
+  .display-xl {
+    font-size: clamp(2.75rem, 7.2vw, 6.25rem);
+    line-height: 0.98;
+    letter-spacing: -0.03em;
+  }
+  .display-lg {
+    font-size: clamp(2.25rem, 5vw, 4.25rem);
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+  }
+  .display-md {
+    font-size: clamp(1.75rem, 3.2vw, 2.75rem);
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+  }
+  .display-sm {
+    font-size: clamp(1.3rem, 2vw, 1.7rem);
+    line-height: 1.22;
+    letter-spacing: -0.015em;
+  }
+
+  .lede {
+    font-size: clamp(1.0625rem, 1.35vw, 1.3125rem);
+    line-height: 1.6;
+    font-weight: 350;
+  }
+}
+
+@layer utilities {
+  /* ---- Signature motif 1: the arch --------------------------------
+     Echoes the arched window in the brand photography. Applied to
+     portraiture and to the hero frame. */
+  .arch {
+    border-radius: var(--radius-arch) var(--radius-arch) 0.75rem 0.75rem;
+  }
+  .arch-sm {
+    border-radius: 7rem 7rem 0.625rem 0.625rem;
+  }
+
+  /* ---- Signature motif 2: halftone dot field ----------------------
+     A dot lattice that dissolves. Used as a section transition and
+     as quiet texture behind editorial blocks. */
+  .dotfield {
+    background-image: radial-gradient(var(--color-sage-mid) 1.15px, transparent 1.15px);
+    background-size: 13px 13px;
+    background-position: 0 0;
+  }
+  .dotfield-dense {
+    background-image: radial-gradient(var(--color-sage) 1.3px, transparent 1.3px);
+    background-size: 9px 9px;
+  }
+  .dotfield-light {
+    background-image: radial-gradient(rgb(255 255 255 / 0.32) 1.2px, transparent 1.2px);
+    background-size: 12px 12px;
+  }
+  /* The lattice drifts, very slowly. One full loop is 8 tiles across and 4
+     down, so the tiling stays seamless and the motion never resolves into a
+     visible jump. Slow enough to read as atmosphere rather than animation. */
+  @keyframes dot-drift {
+    from {
+      background-position: 0 0;
+    }
+    to {
+      background-position: 96px 48px;
+    }
+  }
+  .dotfield-drift {
+    animation: dot-drift 60s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dotfield-drift {
+      animation: none;
+    }
+  }
+
+  /* ---- Story marquee ---------------------------------------------
+     The track carries the list twice, so translating exactly -50% lands
+     on an identical frame and the loop is invisible. */
+  @keyframes story-marquee {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+  .story-marquee {
+    animation: story-marquee 64s linear infinite;
+    will-change: transform;
+  }
+  .group:hover > .story-marquee,
+  .group:focus-within > .story-marquee {
+    animation-play-state: paused;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .story-marquee {
+      animation: none;
+    }
+    /* The wrapper takes over as the scroller — it carries the tabindex, so the
+       track stays reachable without a pointer. */
+    .story-scroller {
+      overflow-x: auto;
+    }
+  }
+
+  .fade-b {
+    mask-image: linear-gradient(to bottom, black, transparent);
+  }
+  .fade-t {
+    mask-image: linear-gradient(to top, black, transparent);
+  }
+  .fade-r {
+    mask-image: linear-gradient(to right, black 10%, transparent);
+  }
+  .fade-radial {
+    mask-image: radial-gradient(ellipse at center, black 20%, transparent 72%);
+  }
+
+  /* ---- Grain: keeps large flat fields from feeling digital -------- */
+  .grain::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.4;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.22'/%3E%3C/svg%3E");
+  }
+
+  /* ---- Hairline rules instead of shadows ------------------------- */
+  .rule {
+    border-color: color-mix(in oklab, var(--color-sage) 34%, transparent);
+  }
+
+  .shell {
+    width: 100%;
+    max-width: 84rem;
+    margin-inline: auto;
+    padding-inline: 1.375rem;
+  }
+  @media (min-width: 48rem) {
+    .shell {
+      padding-inline: 2.5rem;
+    }
+  }
+  @media (min-width: 80rem) {
+    .shell {
+      padding-inline: 3.5rem;
+    }
+  }
+
+  .shell-narrow {
+    width: 100%;
+    max-width: 46rem;
+    margin-inline: auto;
+    padding-inline: 1.375rem;
+  }
+
+  /* Underline that draws itself on hover */
+  .link-draw {
+    position: relative;
+  }
+  .link-draw::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -2px;
+    width: 100%;
+    height: 1px;
+    background: currentColor;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.5s var(--ease-calm);
+  }
+  .link-draw:hover::after,
+  .link-draw:focus-visible::after {
+    transform: scaleX(1);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
