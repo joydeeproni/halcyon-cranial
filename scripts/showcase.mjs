@@ -97,7 +97,7 @@ async function newPage(browser) {
   return { ctx, page }
 }
 
-/** One full pass so lazy images decode and in-view reveals settle. */
+/** One full pass so lazy images decode. Also fires every in-view reveal. */
 async function warm(page) {
   await page.evaluate(async () => {
     const step = window.innerHeight * 0.8
@@ -108,6 +108,30 @@ async function warm(page) {
     window.scrollTo(0, 0)
   })
   await page.waitForTimeout(500)
+}
+
+/**
+ * Warm, then reload.
+ *
+ * Warming is what decodes the lazy images, but it also trips every
+ * scroll-triggered reveal — and those fire once. Capturing straight after a
+ * warm gives you a page where all the entrance animation has already
+ * happened, which is exactly why a recording looks inert. The reload resets
+ * the reveals while the images stay in cache, so they play on camera.
+ */
+async function prime(page, url = BASE) {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await warm(page)
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.evaluate(() => document.fonts.ready)
+  await page.waitForTimeout(400)
+}
+
+/** Park above a point so the approach sweep plays the reveals on the way in. */
+async function parkAbove(page, y, gap = H * 0.85) {
+  await page.evaluate((v) => window.scrollTo(0, Math.max(0, v)), y - gap)
+  await page.waitForTimeout(450)
+  return Math.max(0, y - gap)
 }
 
 /** Absolute document Y of the section containing `text`. */
@@ -135,9 +159,12 @@ const scenes = [
     id: '01',
     name: 'hero-entrance',
     async run(page, rec) {
+      // Fresh load, so the entrance choreography plays from frame zero.
       await page.goto(BASE, { waitUntil: 'domcontentloaded' })
       await page.evaluate(() => document.fonts.ready)
-      await rec.shot(page, 38, 65)
+      await rec.shot(page, 34, 65)
+      // Then drift down so the trust strip and opening section reveal.
+      await sweep(page, rec, 0, 900, 16, 70)
       rec.hold()
     },
   },
@@ -145,15 +172,11 @@ const scenes = [
     id: '02',
     name: 'stat-figures-blur-in',
     async run(page, rec) {
-      await page.goto(BASE, { waitUntil: 'networkidle' })
-      await warm(page)
+      await prime(page)
       const y = await anchorY(page, 'Medical hair loss is not a cosmetic problem')
-      // Reload so the reveal is unfired, park below it, then rise into view.
-      await page.reload({ waitUntil: 'networkidle' })
-      await page.evaluate((v) => window.scrollTo(0, v), y - H * 0.8)
-      await page.waitForTimeout(500)
-      await sweep(page, rec, y - H * 0.8, y - H * 0.05, 18, 70)
-      await rec.shot(page, 20, 65)
+      const from = await parkAbove(page, y)
+      await sweep(page, rec, from, y - H * 0.06, 20, 70)
+      await rec.shot(page, 18, 65) // hold while the figures resolve
       rec.hold()
     },
   },
@@ -162,10 +185,10 @@ const scenes = [
     name: 'process-stack-scroll',
     heavy: true,
     async run(page, rec) {
-      await page.goto(BASE, { waitUntil: 'networkidle' })
-      await warm(page)
+      await prime(page)
       const y = await anchorY(page, 'Five stages, none of them rushed')
-      await sweep(page, rec, y - 140, y + 3500, 54, 55)
+      const from = await parkAbove(page, y, H * 0.75)
+      await sweep(page, rec, from, y + 3500, 60, 55)
       rec.hold()
     },
   },
@@ -174,18 +197,17 @@ const scenes = [
     name: 'testimonial-marquee',
     heavy: true,
     async run(page, rec) {
-      await page.goto(BASE, { waitUntil: 'networkidle' })
-      await warm(page)
+      await prime(page)
       const y = await anchorY(page, 'Two thousand four hundred people')
-      await page.evaluate((v) => window.scrollTo(0, v), y - 30)
-      await page.waitForTimeout(700)
-      // Drive the marquee by hand so one GIF loop is exactly one track loop.
+      const from = await parkAbove(page, y, H * 0.7)
+      // Approach first, so the heading reveals and the cards arrive moving.
+      await sweep(page, rec, from, y - 30, 14, 70)
       const total = await page.evaluate(() => {
         const t = document.querySelector('.story-marquee')
         t.style.animation = 'none'
         return t.scrollWidth / 2
       })
-      const N = 48
+      const N = 40
       for (let i = 0; i < N; i++) {
         await page.evaluate((x) => {
           document.querySelector('.story-marquee').style.transform = `translate3d(${-x}px,0,0)`
@@ -193,17 +215,17 @@ const scenes = [
         await page.waitForTimeout(35)
         await rec.shot(page)
       }
-      // No hold — it is a seamless loop.
     },
   },
   {
     id: '05',
     name: 'closing-invitation',
     async run(page, rec) {
-      await page.goto(BASE, { waitUntil: 'networkidle' })
-      await warm(page)
+      await prime(page)
       const end = await page.evaluate(() => document.body.scrollHeight - window.innerHeight)
-      await sweep(page, rec, end - 1600, end, 34, 70)
+      await page.evaluate((v) => window.scrollTo(0, v), end - 1700)
+      await page.waitForTimeout(450)
+      await sweep(page, rec, end - 1700, end, 36, 70)
       rec.hold()
     },
   },
@@ -211,11 +233,11 @@ const scenes = [
     id: '06',
     name: 'insurance-verification-form',
     async run(page, rec) {
-      await page.goto(`${BASE}/insurance`, { waitUntil: 'networkidle' })
-      await warm(page)
+      await prime(page, `${BASE}/insurance`)
       const y = await anchorY(page, 'Find out what you would pay')
-      await page.evaluate((v) => window.scrollTo(0, v), y - 50)
-      await page.waitForTimeout(600)
+      const from = await parkAbove(page, y, H * 0.8)
+      // Scroll in first, so the panel and privacy note reveal on camera.
+      await sweep(page, rec, from, y - 50, 16, 70)
 
       const type = async (label, value) => {
         await page.getByLabel(label, { exact: true }).click()
@@ -223,7 +245,7 @@ const scenes = [
         await rec.shot(page, 2)
       }
 
-      await rec.shot(page, 4)
+      await rec.shot(page, 2)
       await type('First name', 'Dana')
       await type('Last name', 'Reyes')
       await type('Email', 'dana@example.com')
@@ -233,7 +255,7 @@ const scenes = [
       await type('Carrier name', 'Neighborhood Health Plan')
       await page.getByText('I authorize Halcyon Cranial Studio').click()
       await page.waitForTimeout(280)
-      await rec.shot(page, 6, 60) // consent ticked, submit enables
+      await rec.shot(page, 5, 60) // consent ticked, submit enables
       await page.getByRole('button', { name: 'Send securely' }).click()
       await page.waitForTimeout(450)
       await rec.shot(page, 8, 70) // confirmation
@@ -245,11 +267,11 @@ const scenes = [
     name: 'story-reveal',
     heavy: true,
     async run(page, rec) {
-      await page.goto(`${BASE}/stories`, { waitUntil: 'networkidle' })
-      await page.evaluate(() => document.fonts.ready)
-      await page.waitForTimeout(400)
+      await prime(page, `${BASE}/stories`)
       const y = await anchorY(page, 'Told by the people')
-      await sweep(page, rec, y + 250, y + 1600, 34, 75)
+      await page.evaluate((v) => window.scrollTo(0, v), y + 200)
+      await page.waitForTimeout(400)
+      await sweep(page, rec, y + 200, y + 1650, 38, 72)
       rec.hold()
     },
   },
@@ -257,19 +279,19 @@ const scenes = [
     id: '08',
     name: 'faq-accordion',
     async run(page, rec) {
-      await page.goto(`${BASE}/faq`, { waitUntil: 'networkidle' })
-      await warm(page)
+      await prime(page, `${BASE}/faq`)
       const y = await anchorY(page, 'Is a cranial prosthesis the same thing as a wig')
-      await page.evaluate((v) => window.scrollTo(0, v), y - 240)
-      await page.waitForTimeout(500)
-      await rec.shot(page, 4, 50)
+      const from = await parkAbove(page, y, H * 0.8)
+      // Scroll in so the intro column and first answer reveal, then interact.
+      await sweep(page, rec, from, y - 240, 16, 70)
+      await rec.shot(page, 3, 50)
       for (const q of [
         /Will my insurance cover it/,
         /How much does a commission cost/,
         /How long does it take/,
       ]) {
         await page.getByRole('button', { name: q }).click()
-        await rec.shot(page, 9, 45)
+        await rec.shot(page, 8, 45)
       }
       rec.hold()
     },
